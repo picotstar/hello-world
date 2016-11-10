@@ -1,1 +1,250 @@
-테스트입
+[브라우저 체크]
+String ua = StringUtils.defaultString(request.getHeader("User-Agent"));
+boolean isChrome = false;
+
+if(ua.indexOf("Chrome") > 0 ){
+	isChrome = true;
+}
+
+[팝업창 가운데 노출]
+var popWidth = 600;
+var popHeight = 140;
+
+var winHeight = document.body.clientHeight;  // 현재창의 높이
+var winWidth = document.body.clientWidth;   // 현재창의 너비
+var winX = window.screenX || window.screenLeft || 0;   // 현재창의 x좌표
+var winY = window.screenY || window.screenTop || 0;    // 현재창의 y좌표
+
+var popX = winX + (winWidth - popWidth)/2;
+var popY = winY + (winHeight - popHeight)/2;
+
+var opt = 'status=no,resizable=no,menubar=no,scrollbars=no,width='+ popWidth + ',height=' + popHeight + ',top=' + popY + ',left=' + popX;
+
+window.open('<%=UPLOAD_POPUP_URL%>', '상품업로드', opt);
+
+
+[스크립트 숫자체크]
+function isNumber(sVal) {
+    if(sVal.length < 1) {
+      return false;
+    }
+    for(var i=0; i<sVal.length; i++) {
+      iBit = parseInt(sVal.substring(i,i+1));     //문자(Char)를 숫자로 변경
+      if(('0' < iBit) || ('9' > iBit)) {
+      } else {
+        return false;
+      }
+    }
+    return true;
+}
+
+
+function uploadPrdExcel(fileName, storedFilePath) {
+		
+		var formObj = document.<%= PAGE_FORMNAME %>;
+
+        formObj["fileName"].value = fileName;
+        formObj["storedPath"].value = storedFilePath;
+
+        var formNm = '<%= PAGE_FORMNAME %>';
+        var params = $("#" + formNm).serialize();
+
+        $.ajax({
+            url : '<%=UPLOAD_URL%>',
+            contentType : "application/x-www-form-urlencoded;text/xml;charset=UTF-8",
+            type : "POST",
+            data : params,
+            cache : false,
+            async : false,
+            processData : false,
+            success : function(jsonData) {
+                
+                if (jsonData.result == "SUCCESS") {
+                	loadData(0, true);
+                }else{
+
+                	if(jsonData.resultMsg != ""){
+                		alert(jsonData.resultMsg);
+                	}else{
+                		alert("정상적으로 처리되지 않았습니다.잠시후에 다시 이용해 주세요.");
+                	}
+                }
+            },
+            error : function(data) {
+                alert("시스템에 이상이 있습니다. 잠시후에 다시 이용해 주세요.");
+            }
+        });
+	}
+	
+	
+	/**
+	 * 상품 엑셀파일 업로드
+	 * */
+	public void execUploadPrdExcel(BaseActionMapping mapping, BaseValidatorForm form, HttpServletRequest req, HttpServletResponse res) throws Exception {
+
+		if (logger.isDebugEnabled()) logger.debug("BtbizOrderAction ::::: execUploadPrdExcel");
+
+		ImfsUserInfo userInfo = getUserInfo(req);
+		String memNo = userInfo.getMemNo() + "";
+		
+		String resultCode = "ERROR";
+		String resultMsg = "";
+
+		String tfileName = StringUtils.defaultString(req.getParameter("fileName"), "");
+		String tStoredPath = StringUtils.defaultString(req.getParameter("storedPath"), "");
+
+		File toFile = new File(tStoredPath);
+		InterparkFileUtility.rename(tStoredPath, toFile.getAbsolutePath());
+
+		if("".equals(tfileName)){
+			resultMsg = "파일업로드가 실패되었습니다. 잠시 후 다시 시도해 주세요.";
+		}else{
+			
+			FileInputStream fis = null;
+			POIFSFileSystem filein = null;
+			HSSFWorkbook wb = null;
+			HSSFSheet sheet = null;
+			HSSFRow row = null;
+
+			try {
+				fis = new FileInputStream(toFile);
+				filein = new POIFSFileSystem(fis);
+				wb = new HSSFWorkbook(filein);
+				sheet = wb.getSheetAt(0);
+				int lastRownum = sheet.getLastRowNum();
+
+				for (int i=0; i<=lastRownum;++i) {
+	
+					if (i <3) {
+						continue; //4번째줄부터 데이터를 입력받는다. 
+					}
+					
+					row = sheet.getRow(i);
+					if (row == null) {
+						throw new Exception(i+1 + "열에 공백값이 입력되어 있습니다.\n해당 열 삭제후 재업로드 바랍니다.");
+					}
+
+					String prdNo = getCellValue(row.getCell((short) 0));
+					String isbn = getCellValue(row.getCell((short) 1));
+					String prdCnt = getCellValue(row.getCell((short) 2)) ;
+
+					if((null == prdNo || "".equals(prdNo)) && (null == isbn || "".equals(isbn))){
+						throw new Exception(i+1 + "열 상품번호 또는 ISBN 값 중에 반드시 하나는 입력해 주세요.");
+					}
+					
+					if (prdNo == null || "".equals(prdNo) || "0".equals(prdNo)) {
+						
+						prdNo = orderMgt.getPrdNoByIsbn(isbn);
+						
+		            	if (prdNo == null || "".equals(prdNo) || "0".equals(prdNo)) {
+		            		throw new Exception(i+1 + "열 상품정보를 찾지 못했습니다.");
+		            	}
+		            }
+					
+					if(null == prdCnt || "".equals(prdCnt)){
+						prdCnt = "1";
+					}else{
+						if (!isNumber(prdCnt)) {
+							throw new Exception(i+1 + "열 상품 수량은 숫자로만 입력해 주세요.");
+						}
+					}
+
+					if (logger.isDebugEnabled()) logger.debug("::::: rowNo : " + i + " | prdNo : " +  prdNo + " | isbn : " +  isbn + " | prdCnt" +  prdCnt);
+					
+					// 패키지상품 체크
+					if ((orderMgt.getSetProductYn(prdNo)).equals("Y")) {
+						throw new Exception(i+1 + "열 패키지 상품은 등록할 수 없습니다.");
+					}
+					
+					StringBuffer sbTmpTgtPrds = new StringBuffer(); 
+					
+					sbTmpTgtPrds.append("\n")
+                       .append("SELECT ").append(prdNo).append(" AS prd_no, ")
+                       .append(prdCnt).append(" AS prd_cnt, ")
+                       .append("'1' AS tp FROM DUAL");
+					
+					boolean blErr = false;
+					
+					BeanSet bsChkPrds = (BeanSet)displayMgt.ckeckEestimateCart(new Double(memNo), sbTmpTgtPrds.toString());    
+
+					if ( bsChkPrds != null && bsChkPrds.size() > 0 ){
+			            BtbCheckEstimateCartDto btbCheckEstimateCartDto = null;
+
+			            for(int iErr=0; iErr<bsChkPrds.size(); iErr++) {
+			                btbCheckEstimateCartDto = (BtbCheckEstimateCartDto)bsChkPrds.get(iErr);
+
+			                if ( btbCheckEstimateCartDto.getErrTp() != null && !"".equals(btbCheckEstimateCartDto.getErrTp()) ) {
+			                    blErr = true;
+			                    break;
+			                }
+			            }
+			        }
+					
+					//상품검사에 통과한경우 견적함에 담는다.
+			        if ( !blErr ){  
+			            EstimateCartDto estimateCartDto = new EstimateCartDto();
+			    
+			            String[] arrPrdNo = new String[1];
+			            arrPrdNo[0] = prdNo;
+			            
+			            estimateCartDto.setMemNo(new Double(memNo));
+			            estimateCartDto.setEstimateCartTp("1"); //견적함
+			            estimateCartDto.setModNo(new Double(memNo));
+			            estimateCartDto.setRegNo(new Double(memNo));
+			            estimateCartDto.setArrPrdNo(arrPrdNo);
+			    
+			            try {
+			                displayMgtTx.mergeEstimateCart(estimateCartDto, sbTmpTgtPrds.toString());
+			                resultCode = "SUCCESS";
+			                
+			            } catch (Exception ex) {
+			                resultCode = "ERROR";
+			                throw new Exception("상품추가 실패하였습니다.");
+			            }
+			        }else{
+			        	throw new Exception("상품검사 통과에 실패하였습니다.");
+			        }
+				}
+
+
+			} catch (Exception e){
+			
+				resultCode = "ERROR";
+				resultMsg = e.getMessage();
+				e.printStackTrace();
+
+			} finally {
+				try {
+					if (fis != null) {
+						fis.close();
+					}
+				} catch (Exception ignored) {
+					logger.error(ignored);
+				}
+			}
+
+		}
+		
+		JSONObject rtnJson = new JSONObject();
+
+		rtnJson.put("result", resultCode);
+		rtnJson.put("resultMsg", resultMsg);
+		
+		// ------------------------------------------
+		// Out Print Result
+		// ------------------------------------------
+		res.setContentType("text/json; charset=utf-8");
+		res.setHeader("Cache-Control", "no-cache");
+		PrintWriter outPrint = res.getWriter();
+		outPrint.write(rtnJson.toString());
+		outPrint.flush();
+		outPrint.close(); 
+	}
+	
+	
+	
+
+git clone http://10.20.7.184:8080/ui/book-desktop.git
+install
+npm config set cafile = "<path to certificate file>"
+npm config set strict-ssl false
